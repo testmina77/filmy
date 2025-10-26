@@ -198,7 +198,7 @@ button:focus, a:focus { outline: 3px solid rgba(90,208,255,0.12); outline-offset
 }
 
 /* Medium / tablet: 2 kolumny */
-@media (max-width: 1000px) {
+@media (max-width: 1200px) {
   .grid { grid-template-columns: repeat(2, 1fr); gap: calc(var(--gap) * 1.15); }
   :root { --card-min: 260px; --gap: 10px; }
   .meta { padding: 12px; font-size:14px; }
@@ -206,7 +206,7 @@ button:focus, a:focus { outline: 3px solid rgba(90,208,255,0.12); outline-offset
 }
 
 /* Mobile: 1 kolumna, większe, thumb-friendly karty */
-@media (max-width: 600px) {
+@media (max-width: 800px) {
   :root { --card-min: 100%; --gap: 14px; --touch-padding: 16px; }
   .grid { grid-template-columns: 1fr; gap: calc(var(--gap) * 1.4); }
   .card {
