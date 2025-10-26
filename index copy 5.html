@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Google</title>
+<style>
+:root {
+  --bg: #0b0c10;
+  --card: #0f1113;
+  --muted: #9aa0a6;
+  --accent: #5ad0ff;
+  --gap: 12px
+}
+* { box-sizing: border-box }
+body {
+  margin: 0;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  background: linear-gradient(180deg, #07080a, #0b0c10);
+  color: #eaf6ff;
+  padding: 18px
+}
+.wrap { max-width: 1200px; margin: 0 auto }
+header { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px }
+h1 { font-size:18px; margin:0 }
+.controls { display:flex; gap:8px; align-items:center }
+button {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  color: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer
+}
+button.primary {
+  background: linear-gradient(90deg, #062235, #043b5a);
+  border: 1px solid rgba(90, 208, 255, 0.12)
+}
+.grid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--gap) }
+.card {
+  background: var(--card);
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid rgba(255,255,255,0.02);
+  transition: transform .12s, box-shadow .12s
+}
+.card:hover { transform:translateY(-6px); box-shadow:0 14px 30px rgba(0,0,0,0.5) }
+.thumb {
+  height:auto;
+  background: linear-gradient(180deg,#0b0d11,#0e1115);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  position:relative
+}
+.thumb img { width:100%; height:auto; object-fit:cover; display:block }
+.meta { padding:10px; font-size:13px }
+.title { white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+.sub { color:var(--muted); font-size:12px; margin-top:6px }
+.modal {
+  position:fixed;
+  inset:0;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  background:rgba(0,0,0,0.7);
+  z-index:60;
+  padding:20px
+}
+.modal.open { display:flex }
+.player-box { width:95%; max-width:1100px; background:#071018; border-radius:10px; padding:12px }
+video { width:100%; height:auto; border-radius:8px; background:black; max-height:80vh }
+.row { display:flex; gap:8px; align-items:center }
+.status { color:var(--muted); font-size:13px }
+.empty {
+  padding:28px;
+  border-radius:10px;
+  background:rgba(255,255,255,0.02);
+  text-align:center;
+  color:var(--muted)
+}
+.breadcrumb { display:flex; gap:6px; align-items:center; color:var(--muted); font-size:13px }
+.breadcrumb a { color:var(--muted); text-decoration:none }
+.badge { font-size:11px; color:var(--muted); background:rgba(255,255,255,0.02); padding:6px; border-radius:8px }
+.folder-icon { width:44px; height:44px; display:inline-block; vertical-align:middle }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Jutup bez cenzóry</h1>
+      <div id="breadcrumb" class="breadcrumb" aria-label="Ścieżka"></div>
+    </div>
+    <div class="controls">
+      <button id="upBtn" title="Idź do góry">⬆ Up</button>
+      <button id="refreshBtn" class="primary">⭮ Odśwież</button>
+      <label class="row status" id="status">Ładowanie…</label>
+      <select id="sortSelect" title="Sortuj">
+        <option value="name">Sortuj: nazwa ⬆</option>
+        <option value="name-desc">Sortuj: nazwa ⬇</option>
+        <option value="size">Sortuj: rozmiar ⬆</option>
+        <option value="size-desc">Sortuj: rozmiar ⬇</option>
+        <option value="duration">Sortuj: czas ⬆</option>
+        <option value="duration-desc">Sortuj: czas ⬇</option>
+      </select>
+    </div>
+  </header>
+  <main>
+    <div id="empty" class="empty" style="display:none">Brak plików/ folderów w katalogu <code>./videos/</code>. Dodaj <code>manifest.json</code> lub włącz listing katalogów.</div>
+    <div id="grid" class="grid" aria-live="polite"></div>
+  </main>
+</div>
+<div id="modal" class="modal" role="dialog" aria-modal="true">
+  <div class="player-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div><strong id="modalTitle">Tytuł</strong>
+        <div id="modalMeta" style="color:var(--muted);font-size:13px"></div>
+      </div>
+      <div><button id="closeBtn">✕ Zamknij</button></div>
+    </div>
+    <video id="videoPlayer" controls playsinline></video>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<script>
+(async function() {
+  const grid = document.getElementById('grid');
+  const status = document.getElementById('status');
+  const empty = document.getElementById('empty');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const sortSelect = document.getElementById('sortSelect');
+  const modal = document.getElementById('modal');
+  const videoPlayer = document.getElementById('videoPlayer');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalMeta = document.getElementById('modalMeta');
+  const closeBtn = document.getElementById('closeBtn');
+  const upBtn = document.getElementById('upBtn');
+  const breadcrumbEl = document.getElementById('breadcrumb');
+
+  const baseVideosUrl = new URL('./videos/', location.href).href;
+  let currentPath = '';
+  let pathStack = [];
+  let library = [];
+  const defaultFolderDataUrl = 'data:image/svg+xml;utf8,'+encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 24 24' fill='none'><path d='M3 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z' fill='%23ffd166' stroke='%23ffb347' stroke-width='0.5'/></svg>`);
+  async function getMultipartDuration(urls) {
+    let total = 0;
+    for(const url of urls) {
+      const dur = await getVideoDuration(url);
+      total += dur || 0;
+    }
+    return total;
+  }
+  async function fetchManifest(path) {
+    try {
+      const url = new URL('manifest.json', baseVideosUrl+path).href;
+      const res = await fetch(url,{cache:'no-store'});
+      if(!res.ok) return null;
+      const json = await res.json();
+      if(!json) return null;
+      const items = Array.isArray(json)?json:[json];
+      return items.map(item=>{
+        if(item.dir){
+          return {type:'dir',name:item.title||item.dir.replace(/\/$/,'').split('/').pop(),raw:item.dir,size:null,duration:null,thumbUrl:null};
+        }
+        if(item.file){
+          const filePaths = Array.isArray(item.file)?item.file:[item.file];
+          let thumbUrl = null;
+          if(item.miniatura){
+            try{thumbUrl=new URL(encodeURIComponent(item.miniatura),baseVideosUrl+path).href}catch(e){}
+          }
+          return {type:'file',name:item.title||filePaths[0],raw:filePaths,size:null,duration:null,thumbUrl};
+        }
+        return null;
+      }).filter(Boolean);
+    } catch(e){return null;}
+  }
+
+  async function statFile(url){try{const r=await fetch(url,{method:'HEAD'});if(!r.ok)return null;const s=r.headers.get('content-length');return s?parseInt(s,10):null}catch(e){return null}}
+
+  function humanSize(bytes){if(!bytes&&bytes!==0)return '—';if(bytes<1024)return bytes+' B';const units=['KB','MB','GB','TB'];let i=-1,b=bytes;do{b/=1024;i++}while(b>=1024&&i<units.length-1);return b.toFixed(b>=10?0:1)+' '+units[i]}
+  function formatDuration(sec){return ''; if(!sec&&sec!==0)return '—';const s=Math.floor(sec%60).toString().padStart(2,'0');const m=Math.floor((sec/60)%60).toString().padStart(2,'0');const h=Math.floor(sec/3600);return h?`${h}:${m}:${s}`:`${m}:${s}`}
+
+  function renderBreadcrumb(){
+    breadcrumbEl.innerHTML='';
+    const rootLink=document.createElement('a');
+    rootLink.href='#'; rootLink.textContent='videos/';
+    rootLink.addEventListener('click',e=>{e.preventDefault();navigateTo('')});
+    breadcrumbEl.appendChild(rootLink);
+    let acc='';
+    pathStack.forEach(part=>{
+      acc+=part+'/';
+      const sep=document.createElement('span'); sep.textContent=' / '; breadcrumbEl.appendChild(sep);
+      const link=document.createElement('a'); link.href='#'; link.textContent=part+'/'; link.addEventListener('click',e=>{e.preventDefault();navigateTo(acc)});
+      breadcrumbEl.appendChild(link);
+    });
+  }
+
+  async function navigateTo(path){currentPath=path||'';pathStack=currentPath?currentPath.replace(/\/$/,'').split('/') : []; renderBreadcrumb(); await loadLibrary()}
+
+  async function loadLibrary(){
+    status.textContent='Szukam plików/folderów…';
+    library=[]; grid.innerHTML='';
+    const manifestItems=await fetchManifest(currentPath);
+    if(manifestItems?.length){await processEntries(manifestItems);status.textContent=`${library.length} załadowanych elementów`; return;}
+    status.textContent='Brak plików lub brak dostępu do listingu katalogu.'; empty.style.display='block'; grid.innerHTML='';
+  }
+
+  async function processEntries(entries){
+    empty.style.display='none';
+    for(const entry of entries){
+      const item={type:entry.type,name:entry.name,url:Array.isArray(entry.raw)?new URL(entry.raw[0],baseVideosUrl+currentPath).href:new URL(entry.raw,baseVideosUrl+currentPath).href,size:null,duration:null,thumbUrl:entry.thumbUrl||null};
+      library.push(item); renderGrid();
+      if(item.type==='file'){
+        const size=await statFile(item.url); if(size)item.size=size;
+        if(!item.thumbUrl){try{const candidate=new URL(item.name.replace(/\.mp4$/i,'.png'),baseVideosUrl+currentPath).href;const exists=await imageExists(candidate,2500);item.thumbUrl=exists?candidate:defaultFolderDataUrl}catch(e){item.thumbUrl=defaultFolderDataUrl}}
+      }else item.thumbUrl=defaultFolderDataUrl;
+      renderGrid();
+    }
+  }
+
+  async function imageExists(url,timeout=4000){return new Promise(resolve=>{const img=new Image();let done=false; img.onload=()=>{if(done)return;done=true;resolve(true)}; img.onerror=()=>{if(done)return;done=true;resolve(false)}; img.src=url; setTimeout(()=>{if(done)return;done=true;resolve(false)},timeout)})}
+
+  function renderGrid(){
+    grid.innerHTML='';
+    if(!library.length)return;
+    const mode=sortSelect.value;
+    const list=[...library].sort((a,b)=>{if(a.type!==b.type)return a.type==='dir'?-1:1; switch(mode){case'name':return a.name.localeCompare(b.name);case'name-desc':return b.name.localeCompare(a.name);case'size':return(a.size||0)-(b.size||0);case'size-desc':return(b.size||0)-(a.size||0);case'duration':return(a.duration||0)-(b.duration||0);case'duration-desc':return(b.duration||0)-(a.duration||0);default:return 0}});
+    for(const item of list){
+      const card=document.createElement('div'); card.className='card';
+      const thumb=document.createElement('div'); thumb.className='thumb';
+      if(item.thumbUrl){const img=document.createElement('img'); img.src=item.thumbUrl; img.alt=item.name; thumb.appendChild(img)}else{const ph=document.createElement('div'); ph.style.color='var(--muted)'; ph.style.fontSize='13px'; ph.textContent=item.type==='dir'?'Folder':'Brak miniaturki'; thumb.appendChild(ph)}
+      if(item.type==='dir'){const folderBadge=document.createElement('div'); folderBadge.style.position='absolute'; folderBadge.style.left='8px'; folderBadge.style.top='8px'; folderBadge.innerHTML=`<svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="#ffd166"/></svg>`; thumb.appendChild(folderBadge)}
+      const meta=document.createElement('div'); meta.className='meta';
+      const title=document.createElement('div'); title.className='title'; title.textContent=item.name+(item.type==='dir'?'/':'');
+      const sub=document.createElement('div'); sub.className='sub'; sub.textContent=item.type==='dir'?'Katalog':`${formatDuration(item.duration)} • ${item.size?humanSize(item.size):'—'}`;
+      meta.appendChild(title); meta.appendChild(sub); card.appendChild(thumb); card.appendChild(meta);
+      card.addEventListener('click',()=>{if(item.type==='dir'){const newPath=(currentPath?currentPath:'')+encodeURIComponent(item.name)+'/';navigateTo(newPath)}else openPlayer(item)});
+      grid.appendChild(card);
+    }
+  }
+
+  function openPlayer(item){
+    modalTitle.textContent = item.name;
+    modalMeta.textContent = '—'; // opcjonalnie możesz tu dodać coś innego
+
+    videoPlayer.pause();
+    videoPlayer.removeAttribute('src');
+    videoPlayer.load();
+
+    modal.classList.add('open');
+
+    if(item.url.endsWith('.m3u8')){
+      // HLS
+      if(Hls.isSupported()){
+        const hls = new Hls();
+        hls.loadSource(item.url);
+        hls.attachMedia(videoPlayer);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => videoPlayer.play().catch(() => {}));
+      } else if(videoPlayer.canPlayType('application/vnd.apple.mpegurl')){
+        videoPlayer.src = item.url;
+        videoPlayer.addEventListener('loadedmetadata', () => videoPlayer.play());
+      }
+    } else {
+      console.warn('Nieobsługiwany format, tylko .m3u8 jest dozwolone');
+    }
+  }
+
+
+  async function playMultipartVideo(parts){
+    if(!parts?.length)return;
+    const mediaSource=new MediaSource();
+    videoPlayer.src=URL.createObjectURL(mediaSource);
+    modal.classList.add('open');
+    mediaSource.addEventListener('sourceopen',async ()=>{
+      const mime='video/mp4; codecs="avc1.64001E, mp4a.40.2"';
+      const sb=mediaSource.addSourceBuffer(mime);
+      for(let i=0;i<parts.length;i++){try{const res=await fetch(parts[i]);const buf=await res.arrayBuffer();await appendBufferAsync(sb,buf)}catch(e){console.error('Fragment error',parts[i],e)}}
+      if(mediaSource.readyState==='open')mediaSource.endOfStream();
+      videoPlayer.play().catch(()=>{});
+    });
+  }
+
+  function appendBufferAsync(sb,buf){return new Promise(resolve=>{sb.addEventListener('updateend',resolve,{once:true});sb.appendBuffer(buf)})}
+
+  function closeModal(){videoPlayer.pause(); videoPlayer.removeAttribute('src'); videoPlayer.load(); modal.classList.remove('open')}
+  function goUp(){if(!currentPath)return; const parts=currentPath.replace(/\/$/,'').split('/'); parts.pop(); navigateTo(parts.length?parts.join('/')+'/':'')}
+
+  refreshBtn.addEventListener('click',()=>loadLibrary());
+  sortSelect.addEventListener('change',renderGrid);
+  closeBtn.addEventListener('click',closeModal);
+  modal.addEventListener('click',e=>{if(e.target===modal)closeModal()});
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+  upBtn.addEventListener('click',goUp);
+
+  renderBreadcrumb();
+  await loadLibrary();
+})();
+</script>
+</body>
+</html>

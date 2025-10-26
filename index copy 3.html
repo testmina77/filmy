@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Galeria (./videos) — foldery + poprawione miniaturki</title>
+<style>
+:root{--bg:#0b0c10;--card:#0f1113;--muted:#9aa0a6;--accent:#5ad0ff;--gap:12px}
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#07080a,#0b0c10);color:#eaf6ff;padding:18px}
+.wrap{max-width:1200px;margin:0 auto}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px}
+h1{font-size:18px;margin:0}
+.controls{display:flex;gap:8px;align-items:center}
+button{background:transparent;border:1px solid rgba(255,255,255,0.04);color:inherit;padding:8px 10px;border-radius:8px;cursor:pointer}
+button.primary{background:linear-gradient(90deg,#062235,#043b5a);border:1px solid rgba(90,208,255,0.12)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--gap)}
+.card{background:var(--card);border-radius:10px;overflow:hidden;cursor:pointer;border:1px solid rgba(255,255,255,0.02);transition:transform .12s,box-shadow .12s}
+.card:hover{transform:translateY(-6px);box-shadow:0 14px 30px rgba(0,0,0,0.5)}
+.thumb{height:110px;background:linear-gradient(180deg,#0b0d11,#0e1115);display:flex;align-items:center;justify-content:center;position:relative}
+.thumb img{width:100%;height:110px;object-fit:cover;display:block}
+.meta{padding:10px;font-size:13px}
+.title{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{color:var(--muted);font-size:12px;margin-top:6px}
+.modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.7);z-index:60;padding:20px}
+.modal.open{display:flex}
+.player-box{width:min(1100px,95%);background:#071018;border-radius:10px;padding:12px}
+video{width:100%;height:auto;border-radius:8px;background:black}
+.row{display:flex;gap:8px;align-items:center}
+.status{color:var(--muted);font-size:13px}
+.empty{padding:28px;border-radius:10px;background:rgba(255,255,255,0.02);text-align:center;color:var(--muted)}
+.breadcrumb{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
+.breadcrumb a{color:var(--muted);text-decoration:none}
+.badge{font-size:11px;color:var(--muted);background:rgba(255,255,255,0.02);padding:6px;border-radius:8px}
+.folder-icon{width:44px;height:44px;display:inline-block;vertical-align:middle}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Galeria — katalog <code>./videos/</code></h1>
+      <div id="breadcrumb" class="breadcrumb" aria-label="Ścieżka"></div>
+    </div>
+    <div class="controls">
+      <button id="upBtn" title="Idź do góry">⬆ Up</button>
+      <button id="refreshBtn" class="primary">⭮ Odśwież</button>
+      <label class="row status" id="status">Ładowanie…</label>
+      <select id="sortSelect" title="Sortuj">
+        <option value="name">Sortuj: nazwa ⬆</option>
+        <option value="name-desc">Sortuj: nazwa ⬇</option>
+        <option value="size">Sortuj: rozmiar ⬆</option>
+        <option value="size-desc">Sortuj: rozmiar ⬇</option>
+        <option value="duration">Sortuj: czas ⬆</option>
+        <option value="duration-desc">Sortuj: czas ⬇</option>
+      </select>
+    </div>
+  </header>
+
+  <main>
+    <div id="empty" class="empty" style="display:none">Brak plików/ folderów w katalogu <code>./videos/</code>. Dodaj <code>manifest.json</code> lub włącz listing katalogów.</div>
+    <div id="grid" class="grid" aria-live="polite"></div>
+  </main>
+</div>
+
+<div id="modal" class="modal" role="dialog" aria-modal="true">
+  <div class="player-box">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <div><strong id="modalTitle">Tytuł</strong><div id="modalMeta" style="color:var(--muted);font-size:13px"></div></div>
+      <div><button id="closeBtn">✕ Zamknij</button></div>
+    </div>
+    <video id="videoPlayer" controls playsinline></video>
+  </div>
+</div>
+
+<script>
+(async function(){
+  const grid = document.getElementById('grid');
+  const status = document.getElementById('status');
+  const empty = document.getElementById('empty');
+  const refreshBtn = document.getElementById('refreshBtn');
+  const sortSelect = document.getElementById('sortSelect');
+  const modal = document.getElementById('modal');
+  const videoPlayer = document.getElementById('videoPlayer');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalMeta = document.getElementById('modalMeta');
+  const closeBtn = document.getElementById('closeBtn');
+  const upBtn = document.getElementById('upBtn');
+  const breadcrumbEl = document.getElementById('breadcrumb');
+
+  // base URL to ./videos/
+  const baseVideosUrl = new URL('./videos/', location.href).href;
+
+  // track current path inside videos/ ('' = root, 'folder/' = inside)
+  let currentPath = '';
+  let pathStack = []; // parts
+  let library = []; // items: {type: 'file'|'dir', name, url, size, duration, thumbUrl}
+
+  // default folder SVG dataURL (small)
+  const defaultFolderDataUrl = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 24 24' fill='none'><path d='M3 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z' fill='%23ffd166' stroke='%23ffb347' stroke-width='0.5'/></svg>`
+  );
+
+  // fetch manifest.json if present in current folder
+  async function fetchManifest(path){
+    try{
+      const url = new URL('manifest.json', baseVideosUrl + path).href;
+      const res = await fetch(url, {cache:'no-store'});
+      if(!res.ok) return null;
+      const json = await res.json();
+      if(Array.isArray(json)) return json;
+      return null;
+    }catch(e){ return null; }
+  }
+
+  // fetch directory listing and extract links (files + folders)
+  async function fetchDirectoryListing(path){
+    try{
+      const res = await fetch(baseVideosUrl + path, {cache:'no-store'});
+      if(!res.ok) return null;
+      const text = await res.text();
+      // find href values
+      const hrefs = Array.from(text.matchAll(/href\s*=\s*["']([^"']+)["']/gi)).map(m=>m[1]);
+      // normalize and filter out ../ or index etc
+      const cleaned = hrefs
+        .map(h => decodeURIComponent(h.split('?')[0].split('#')[0]))
+        .filter(h => h && h !== '../' && h.toLowerCase() !== 'index.html' && h.toLowerCase() !== './');
+      // get unique
+      const uniq = Array.from(new Set(cleaned));
+      // classify: directory if ends with '/', file otherwise
+      const dirs = uniq.filter(h => /\/$/.test(h)).map(h => ({type:'dir', name: h.replace(/\/$/, '').split('/').pop(), raw: h}));
+      const files = uniq.filter(h => /\.mp4$/i.test(h)).map(h => ({type:'file', name: h.split('/').pop(), raw: h}));
+      // Note: raw may contain nested path; we will resolve relative to current path when building urls
+      return {dirs, files};
+    }catch(e){ return null; }
+  }
+
+  // HEAD to get size
+  async function statFile(url){
+    try{
+      const res = await fetch(url, {method:'HEAD'});
+      if(!res.ok) return null;
+      const size = res.headers.get('content-length');
+      return size ? parseInt(size,10) : null;
+    }catch(e){ return null; }
+  }
+
+  // check if image exists (png thumbnail)
+  function imageExists(url, timeout = 4000){
+    return new Promise((resolve)=>{
+      const img = new Image();
+      let done = false;
+      img.onload = ()=> { if(done) return; done=true; resolve(true); };
+      img.onerror = ()=> { if(done) return; done=true; resolve(false); };
+      img.src = url;
+      setTimeout(()=>{ if(done) return; done=true; resolve(false); }, timeout);
+    });
+  }
+
+  // improved thumbnail generator with cover crop using video natural size to avoid black bars
+  async function generateThumbnailCover(videoUrl, targetW=320, targetH=180){
+    return new Promise((resolve)=>{
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.muted = true;
+      v.crossOrigin = 'anonymous'; // may help if server sets CORS
+      v.src = videoUrl;
+
+      const clean = ()=>{ try{ v.removeAttribute('src'); v.load(); }catch(e){} };
+
+      v.addEventListener('loadedmetadata', () => {
+        const vw = v.videoWidth || 1;
+        const vh = v.videoHeight || 1;
+        const dur = v.duration || 0;
+        // choose seek time
+        const seekTo = Math.min(2, Math.max(0.1, dur/3));
+        const onSeeked = () => {
+          try{
+            // compute source crop (cover)
+            const targetAspect = targetW / targetH;
+            const srcAspect = vw / vh;
+            let sx=0, sy=0, sWidth=vw, sHeight=vh;
+
+            if(srcAspect > targetAspect){
+              // source is wider -> crop width
+              sHeight = vh;
+              sWidth = Math.round(vh * targetAspect);
+              sx = Math.round((vw - sWidth) / 2);
+            } else {
+              // source is taller -> crop height
+              sWidth = vw;
+              sHeight = Math.round(vw / targetAspect);
+              sy = Math.round((vh - sHeight) / 2);
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = targetW;
+            canvas.height = targetH;
+            const ctx = canvas.getContext('2d');
+            // draw from calculated source rect to full target
+            ctx.drawImage(v, sx, sy, sWidth, sHeight, 0, 0, targetW, targetH);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            clean();
+            resolve({thumb: dataUrl, duration: dur});
+          }catch(err){
+            clean();
+            resolve({thumb:null, duration: dur});
+          }
+        };
+
+        v.currentTime = seekTo;
+        v.addEventListener('seeked', onSeeked, {once:true});
+        // safety fallback: if seek fails within 2.5s, attempt immediate capture
+        setTimeout(()=> {
+          try{
+            const canvas = document.createElement('canvas');
+            canvas.width = targetW; canvas.height = targetH;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            clean();
+            resolve({thumb: dataUrl, duration: v.duration || 0});
+          }catch(e){
+            // ignore; real resolution occurs in seeked handler
+          }
+        }, 2500);
+      });
+
+      v.addEventListener('error', ()=> { clean(); resolve({thumb:null, duration:null}); });
+    });
+  }
+
+  function humanSize(bytes){
+    if(!bytes && bytes !== 0) return '—';
+    if(bytes < 1024) return bytes + ' B';
+    const units=['KB','MB','GB','TB'];
+    let i=-1; let b=bytes;
+    do{ b=b/1024; i++; } while(b>=1024 && i<units.length-1);
+    return b.toFixed(b>=10?0:1) + ' ' + units[i];
+  }
+  function formatDuration(sec){ if(!sec && sec !== 0) return '—'; const s=Math.floor(sec%60).toString().padStart(2,'0'); const m=Math.floor((sec/60)%60).toString().padStart(2,'0'); const h=Math.floor(sec/3600); return h?`${h}:${m}:${s}`:`${m}:${s}`; }
+
+  // build breadcrumb UI
+  function renderBreadcrumb(){
+    breadcrumbEl.innerHTML = '';
+    const rootLink = document.createElement('a'); rootLink.href='#'; rootLink.textContent='videos/'; rootLink.addEventListener('click', (e)=>{ e.preventDefault(); navigateTo(''); });
+    breadcrumbEl.appendChild(rootLink);
+    let acc = '';
+    for(let i=0;i<pathStack.length;i++){
+      const part = pathStack[i];
+      acc += part + '/';
+      const sep = document.createElement('span'); sep.textContent = ' / '; breadcrumbEl.appendChild(sep);
+      const link = document.createElement('a'); link.href='#'; link.textContent = part + '/';
+      link.addEventListener('click', (e)=>{ e.preventDefault(); navigateTo(acc); });
+      breadcrumbEl.appendChild(link);
+    }
+  }
+
+  // navigate to path (relative inside videos/)
+  async function navigateTo(path){
+    currentPath = path || '';
+    pathStack = currentPath ? currentPath.replace(/\/$/, '').split('/') : [];
+    renderBreadcrumb();
+    await loadLibrary();
+  }
+
+  // main: load library for currentPath
+  async function loadLibrary(){
+    status.textContent = 'Szukam plików/folderów…';
+    library = [];
+    grid.innerHTML = '';
+
+    // 1) try manifest.json inside current path
+    const manifest = await fetchManifest(currentPath);
+    let names = null;
+    if(Array.isArray(manifest) && manifest.length){
+      // manifest entries may include trailing '/' for directories
+      names = manifest.map(n => n.toString());
+      // split into dirs & files
+      const dirs = names.filter(n => /\/$/.test(n)).map(n => ({type:'dir', name: n.replace(/\/$/,'').split('/').pop(), raw:n}));
+      const files = names.filter(n => /\.mp4$/i.test(n)).map(n => ({type:'file', name: n.split('/').pop(), raw:n}));
+      // combine; manifest controls order
+      const combined = [...dirs, ...files];
+      // process combined
+      await processEntries(combined);
+      status.textContent = `${library.length} elementów załadowanych (manifest)`;
+      return;
+    }
+
+    // 2) try directory listing parse
+    const parsed = await fetchDirectoryListing(currentPath);
+    if(parsed){
+      // prefer showing directories first
+      const entries = [...parsed.dirs, ...parsed.files].map(p => ({type:p.type, name:p.name, raw:p.raw}));
+      await processEntries(entries);
+      status.textContent = `${library.length} elementów załadowanych (listing)`;
+      return;
+    }
+
+    // fallback: nothing found
+    status.textContent = 'Brak plików lub brak dostępu do listingu katalogu. Dodaj manifest.json lub włącz index directory.';
+    empty.style.display = 'block';
+    grid.innerHTML = '';
+  }
+
+  // process entries (array of {type, name, raw})
+  async function processEntries(entries){
+    empty.style.display = 'none';
+    // build items progressively
+    for(const entry of entries){
+      if(entry.type === 'dir'){
+        const dirName = entry.name;
+        const dirUrl = new URL(entry.raw, baseVideosUrl + currentPath).href;
+        const item = {type:'dir', name: dirName, url: dirUrl, size: null, duration:null, thumbUrl: null};
+        library.push(item);
+        renderGrid();
+        // check for folder thumbnail at folder/folder.png
+        try{
+          const thumbCandidate = new URL('folder.png', dirUrl).href;
+          const exists = await imageExists(thumbCandidate, 2500);
+          if(exists) { item.thumbUrl = thumbCandidate; }
+          else item.thumbUrl = defaultFolderDataUrl;
+        }catch(e){
+          item.thumbUrl = defaultFolderDataUrl;
+        }
+        renderGrid();
+      } else { // file
+        const fileName = entry.name;
+        const fileUrl = new URL(entry.raw, baseVideosUrl + currentPath).href;
+        const item = {type:'file', name: fileName, url: fileUrl, size: null, duration:null, thumbUrl: null};
+        library.push(item);
+        renderGrid();
+        // stat for size
+        const size = await statFile(fileUrl);
+        if(size) item.size = size;
+        // check for file.png thumbnail
+        try{
+          const thumbCandidate = new URL(fileName.replace(/\.mp4$/i,'.png'), baseVideosUrl + currentPath).href;
+          const exists = await imageExists(thumbCandidate, 2500);
+          if(exists){
+            item.thumbUrl = thumbCandidate;
+            // still try to get duration (fast range request)
+            const t = await generateThumbnailCover(fileUrl, 200, 112); // small generation for duration
+            if(t && t.duration) item.duration = t.duration;
+          } else {
+            // generate thumbnail (cover crop) as fallback
+            const t = await generateThumbnailCover(fileUrl, 320, 180);
+            if(t) { item.thumbUrl = t.thumb; item.duration = t.duration; }
+          }
+        }catch(e){
+          const t = await generateThumbnailCover(fileUrl, 320, 180);
+          if(t) { item.thumbUrl = t.thumb; item.duration = t.duration; }
+        }
+        renderGrid();
+      }
+    }
+  }
+
+  // render grid with folders first
+  function renderGrid(){
+    grid.innerHTML = '';
+    if(!library.length) return;
+    // sort
+    const mode = sortSelect.value;
+    const list = [...library].sort((a,b)=>{
+      // keep directories before files
+      if(a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+      switch(mode){
+        case 'name': return a.name.localeCompare(b.name);
+        case 'name-desc': return b.name.localeCompare(a.name);
+        case 'size': return (a.size||0) - (b.size||0);
+        case 'size-desc': return (b.size||0) - (a.size||0);
+        case 'duration': return (a.duration||0) - (b.duration||0);
+        case 'duration-desc': return (b.duration||0) - (a.duration||0);
+        default: return 0;
+      }
+    });
+
+    for(const item of list){
+      const card = document.createElement('div'); card.className='card';
+      const thumb = document.createElement('div'); thumb.className='thumb';
+      if(item.thumbUrl){
+        const img = document.createElement('img'); img.src = item.thumbUrl; img.alt = item.name;
+        thumb.appendChild(img);
+      } else {
+        const ph = document.createElement('div'); ph.style.color='var(--muted)'; ph.style.fontSize='13px'; ph.textContent = item.type==='dir' ? 'Folder' : 'Brak miniaturki';
+        thumb.appendChild(ph);
+      }
+
+      // overlay small icon for folder
+      if(item.type === 'dir'){
+        const folderBadge = document.createElement('div');
+        folderBadge.style.position='absolute'; folderBadge.style.left='8px'; folderBadge.style.top='8px';
+        folderBadge.innerHTML = `<svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="#ffd166"/></svg>`;
+        thumb.appendChild(folderBadge);
+      }
+
+      const meta = document.createElement('div'); meta.className='meta';
+      const title = document.createElement('div'); title.className='title'; title.textContent = item.name + (item.type==='dir'? '/' : '');
+      const sub = document.createElement('div'); sub.className='sub';
+      if(item.type==='dir') sub.textContent = 'Katalog';
+      else sub.textContent = `${formatDuration(item.duration)} • ${item.size?humanSize(item.size):'—'}`;
+      meta.appendChild(title); meta.appendChild(sub);
+      card.appendChild(thumb); card.appendChild(meta);
+
+      card.addEventListener('click', ()=>{
+        if(item.type === 'dir'){
+          // navigate into folder (currentPath + folderName + '/')
+          const newPath = (currentPath ? currentPath : '') + encodeURIComponent(item.name) + '/';
+          navigateTo(newPath);
+        } else {
+          openPlayer(item);
+        }
+      });
+
+      grid.appendChild(card);
+    }
+  }
+
+  function openPlayer(item){
+    modalTitle.textContent = item.name;
+    modalMeta.textContent = `${formatDuration(item.duration)} • ${item.size?humanSize(item.size):'—'}`;
+    videoPlayer.src = item.url;
+    videoPlayer.currentTime = 0;
+    modal.classList.add('open');
+    setTimeout(()=> videoPlayer.play().catch(()=>{}),100);
+  }
+
+  function closeModal(){ videoPlayer.pause(); videoPlayer.removeAttribute('src'); videoPlayer.load(); modal.classList.remove('open'); }
+
+  // up (go to parent folder)
+  function goUp(){
+    if(!currentPath) return;
+    const parts = currentPath.replace(/\/$/,'').split('/');
+    parts.pop();
+    const newPath = parts.length ? parts.join('/') + '/' : '';
+    navigateTo(newPath);
+  }
+
+  // events
+  refreshBtn.addEventListener('click', ()=> loadLibrary());
+  sortSelect.addEventListener('change', renderGrid);
+  closeBtn.addEventListener('click', closeModal);
+  modal.addEventListener('click', (e)=> { if(e.target === modal) closeModal(); });
+  document.addEventListener('keydown', (e)=> { if(e.key === 'Escape') closeModal(); });
+  upBtn.addEventListener('click', goUp);
+
+  // initial render
+  renderBreadcrumb();
+  await loadLibrary();
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+*
+
+index copy *.html
+player.html
+
+!*/
+
+!.gitignore
+!**/*.html
+!**/*.ts
+!**/*.m3u8
+!**/*.json
+!**/*.jpg
+!**/*.jpeg
+!**/*.png
